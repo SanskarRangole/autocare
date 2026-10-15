@@ -6,7 +6,7 @@ import { Button } from '../ui/Button'
 import { Mail, Lock, User, AlertCircle, CheckCircle, Zap } from 'lucide-react'
 
 export function AuthModal({ isOpen, onClose }) {
-  const { signIn, signUp, resetPassword, isLiveDatabase } = useAuth()
+  const { signIn, signUp, signInDemo, resetPassword, isLiveDatabase } = useAuth()
   const [tab, setTab] = useState('login') // 'login' | 'register' | 'forgot'
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -26,8 +26,14 @@ export function AuthModal({ isOpen, onClose }) {
         await signIn({ email, password })
         onClose()
       } else if (tab === 'register') {
-        await signUp({ email, password, fullName })
-        onClose()
+        const res = await signUp({ email, password, fullName })
+        if (res?.session) {
+          onClose()
+        } else {
+          setSuccessMessage(
+            'Account created! Please check your email to verify your account, or disable "Confirm email" in your Supabase Dashboard > Authentication > Providers > Email for instant password login.'
+          )
+        }
       } else if (tab === 'forgot') {
         const res = await resetPassword(email)
         setSuccessMessage(res?.message || 'Password reset link sent to your email address.')
@@ -43,7 +49,7 @@ export function AuthModal({ isOpen, onClose }) {
     setError(null)
     setLoading(true)
     try {
-      await signIn({ email: 'driver@autocare.app', password: 'demo-password-123' })
+      await signInDemo()
       onClose()
     } catch (err) {
       setError(err?.message || 'Demo login failed')

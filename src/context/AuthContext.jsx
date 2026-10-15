@@ -11,7 +11,7 @@ import {
   updateProfile as apiUpdateProfile,
   isUsingLiveSupabase,
 } from '../lib/storage'
-import { isSupabaseConfigured } from '../lib/supabase'
+import { supabase, isSupabaseConfigured } from '../lib/supabase'
 
 const AuthContext = createContext(null)
 
@@ -24,14 +24,43 @@ export function AuthProvider({ children }) {
   const isConfigured = isSupabaseConfigured()
 
   useEffect(() => {
+    let authListener = null
+
     async function initAuth() {
       try {
-        setIsLiveDatabase(isUsingLiveSupabase())
+        const live = isUsingLiveSupabase()
+        setIsLiveDatabase(live)
+
         const currentUser = await getCurrentUser()
         setUser(currentUser)
         if (currentUser) {
-          const userProfile = await apiGetProfile(currentUser.id)
+          const userProfile = await apiGetProfile(
+            currentUser.id,
+            currentUser.email,
+            currentUser.user_metadata?.full_name
+          )
           setProfile(userProfile)
+        }
+
+        // Subscribe to live Supabase Auth state changes (sign in, sign out, token refresh)
+        if (live && supabase?.auth?.onAuthStateChange) {
+          const { data: { subscription } } = supabase.auth.onAuthStateChange(
+            async (event, session) => {
+              if (session?.user) {
+                setUser(session.user)
+                const userProfile = await apiGetProfile(
+                  session.user.id,
+                  session.user.email,
+                  session.user.user_metadata?.full_name
+                )
+                setProfile(userProfile)
+              } else if (event === 'SIGNED_OUT') {
+                setUser(null)
+                setProfile(null)
+              }
+            }
+          )
+          authListener = subscription
         }
       } catch (err) {
         console.error('Auth initialization error:', err)
@@ -41,6 +70,12 @@ export function AuthProvider({ children }) {
     }
 
     initAuth()
+
+    return () => {
+      if (authListener?.unsubscribe) {
+        authListener.unsubscribe()
+      }
+    }
   }, [])
 
   const handleSignIn = async (credentials) => {
@@ -48,7 +83,11 @@ export function AuthProvider({ children }) {
     try {
       const { user: signedInUser } = await apiSignIn(credentials)
       setUser(signedInUser)
-      const userProfile = await apiGetProfile(signedInUser.id)
+      const userProfile = await apiGetProfile(
+        signedInUser.id,
+        signedInUser.email || credentials.email,
+        signedInUser.user_metadata?.full_name
+      )
       setProfile(userProfile)
       return signedInUser
     } finally {
@@ -64,7 +103,11 @@ export function AuthProvider({ children }) {
       const session = res.session
       if (newUser && session) {
         setUser(newUser)
-        const userProfile = await apiGetProfile(newUser.id)
+        const userProfile = await apiGetProfile(
+          newUser.id,
+          newUser.email || credentials.email,
+          credentials.fullName || newUser.user_metadata?.full_name
+        )
         setProfile(userProfile)
       }
       return res

@@ -132,6 +132,26 @@ export async function signIn({ email, password }) {
       }
       throw error
     }
+
+    // Automatically sync email & profile to public.profiles table
+    if (data?.user) {
+      try {
+        const userEmail = data.user.email || email
+        const fullName = data.user.user_metadata?.full_name || userEmail.split('@')[0]
+        await supabase.from('profiles').upsert(
+          {
+            id: data.user.id,
+            email: userEmail,
+            full_name: fullName,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'id' }
+        )
+      } catch (syncErr) {
+        console.warn('Profile sync on sign in error:', syncErr)
+      }
+    }
+
     return data
   }
   // Local/Offline mock auth
@@ -171,6 +191,25 @@ export async function signUp({ email, password, fullName }) {
         )
       }
       throw error
+    }
+
+    // If user was created, immediately sync to public.profiles
+    if (data?.user) {
+      try {
+        const userEmail = data.user.email || email
+        const name = fullName || data.user.user_metadata?.full_name || userEmail.split('@')[0]
+        await supabase.from('profiles').upsert(
+          {
+            id: data.user.id,
+            email: userEmail,
+            full_name: name,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'id' }
+        )
+      } catch (syncErr) {
+        console.warn('Failed to upsert profile on signUp:', syncErr)
+      }
     }
 
     // If Supabase created user but session is null (email confirmation requirement enabled)
@@ -235,20 +274,61 @@ export async function resetPassword({ email }) {
   return { success: true, message: `Password reset instructions sent to ${email} (Demo mode simulated)` }
 }
 
-export async function getProfile(userId) {
+export async function getProfile(userId, userEmail = null, userFullName = null) {
   if (isUsingLiveSupabase()) {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .single()
-    if (error && error.code !== 'PGRST116') throw error
-    return data || null
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .maybeSingle()
+
+      if (!error && data) {
+        // If email was null in database but we know userEmail, persist it
+        if (!data.email && userEmail) {
+          await supabase.from('profiles').update({ email: userEmail }).eq('id', userId)
+          data.email = userEmail
+        }
+        return data
+      }
+
+      // If profile row doesn't exist yet, automatically create it!
+      const defaultProfile = {
+        id: userId,
+        email: userEmail,
+        full_name: userFullName || (userEmail ? userEmail.split('@')[0] : 'Vehicle Owner'),
+        currency: 'USD',
+        distance_unit: 'km',
+        volume_unit: 'litres',
+        theme: 'light',
+        updated_at: new Date().toISOString(),
+      }
+
+      const { data: created } = await supabase
+        .from('profiles')
+        .upsert(defaultProfile, { onConflict: 'id' })
+        .select()
+        .single()
+
+      return created || defaultProfile
+    } catch (err) {
+      console.warn('getProfile error:', err)
+      return {
+        id: userId,
+        email: userEmail,
+        full_name: userFullName || (userEmail ? userEmail.split('@')[0] : 'Vehicle Owner'),
+        currency: 'USD',
+        distance_unit: 'km',
+        volume_unit: 'litres',
+        theme: 'light',
+      }
+    }
   }
   const profiles = getLocalItem('profiles', {})
   return profiles[userId] || {
     id: userId,
-    full_name: 'Alex Mercer',
+    email: userEmail,
+    full_name: userFullName || 'Alex Mercer',
     currency: 'USD',
     distance_unit: 'km',
     volume_unit: 'litres',
@@ -260,7 +340,7 @@ export async function updateProfile(userId, profileData) {
   if (isUsingLiveSupabase()) {
     const { data, error } = await supabase
       .from('profiles')
-      .upsert({ id: userId, ...profileData, updated_at: new Date().toISOString() })
+      .upsert({ id: userId, ...profileData, updated_at: new Date().toISOString() }, { onConflict: 'id' })
       .select()
       .single()
     if (error) throw error
