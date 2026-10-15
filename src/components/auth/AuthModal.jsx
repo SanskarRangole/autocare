@@ -26,14 +26,8 @@ export function AuthModal({ isOpen, onClose }) {
         await signIn({ email, password })
         onClose()
       } else if (tab === 'register') {
-        const res = await signUp({ email, password, fullName })
-        if (res?.session) {
-          onClose()
-        } else {
-          setSuccessMessage(
-            'Account created! Please check your email to verify your account, or disable "Confirm email" in your Supabase Dashboard > Authentication > Providers > Email for instant password login.'
-          )
-        }
+        await signUp({ email, password, fullName })
+        onClose()
       } else if (tab === 'forgot') {
         const res = await resetPassword(email)
         setSuccessMessage(res?.message || 'Password reset link sent to your email address.')

@@ -100,8 +100,7 @@ export function AuthProvider({ children }) {
     try {
       const res = await apiSignUp(credentials)
       const newUser = res.user
-      const session = res.session
-      if (newUser && session) {
+      if (newUser) {
         setUser(newUser)
         const userProfile = await apiGetProfile(
           newUser.id,

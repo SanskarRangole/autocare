@@ -45,14 +45,7 @@ export function HomePage() {
       if (authTab === 'login') {
         await signIn({ email, password })
       } else {
-        const res = await signUp({ email, password, fullName })
-        if (res?.session) {
-          setSuccessMsg('Account created and logged into Supabase! Entering dashboard...')
-        } else {
-          setSuccessMsg(
-            'Account created! Please check your email or disable "Confirm email" in Supabase Dashboard > Authentication > Providers > Email for instant login.'
-          )
-        }
+        await signUp({ email, password, fullName })
       }
     } catch (err) {
       setError(err?.message || 'Authentication failed. Please verify your credentials.')
