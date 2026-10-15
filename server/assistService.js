@@ -395,8 +395,14 @@ export async function handleAssistRequest({
   const ai = new GoogleGenAI({ apiKey })
   const context = { activeVehicle, services, fuelLogs, expenses, reminders, documents, location }
 
-  // Candidate models with fast response
-  const modelsToTry = ['gemini-3.5-flash', 'gemini-3.1-flash-lite', 'gemini-3.7-flash']
+  // Candidate models with fast response and broad quota distribution
+  const modelsToTry = [
+    'gemini-3.1-flash-lite',
+    'gemini-3-flash-preview',
+    'gemini-2.5-flash-lite',
+    'gemini-3.5-flash',
+    'gemini-3.7-flash',
+  ]
 
   for (const model of modelsToTry) {
     try {
