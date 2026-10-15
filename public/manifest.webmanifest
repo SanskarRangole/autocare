@@ -1,0 +1,24 @@
+{
+  "name": "AutoCare — Smart Vehicle Ownership Companion",
+  "short_name": "AutoCare",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F8FAFC",
+  "theme_color": "#17365D",
+  "orientation": "portrait",
+  "description": "Zero-friction vehicle maintenance, fuel economy tracking, compliance reminders, and document vault.",
+  "icons": [
+    {
+      "src": "/autocare-logo.jpg",
+      "sizes": "192x192",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/autocare-logo.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    }
+  ]
+}

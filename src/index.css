@@ -1,0 +1,125 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+    
+    /* AutoCare Premium Color Palette */
+    --color-primary-navy: #17365D;
+    --color-primary-navy-hover: #122B4A;
+    --color-royal-blue: #2563EB;
+    --color-interactive-blue: #3B82F6;
+    --color-soft-blue: #EFF6FF;
+    --color-soft-blue-border: #DBEAFE;
+    
+    /* Backgrounds */
+    --color-bg-app: #F8FAFC;
+    --color-bg-card: #FFFFFF;
+    --color-bg-subtle: #F1F5F9;
+    
+    /* Typography */
+    --color-text-primary: #0F172A;
+    --color-text-secondary: #475569;
+    --color-text-muted: #64748B;
+    
+    /* Borders */
+    --color-border-subtle: #E2E8F0;
+    --color-border-hover: #CBD5E1;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: var(--color-bg-app);
+    color: var(--color-text-primary);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-sans);
+    letter-spacing: -0.02em;
+    color: var(--color-text-primary);
+  }
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8;
+}
+
+/* Premium Card & Surface Utilities */
+.card-premium {
+  background-color: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 1rem; /* 16px */
+  box-shadow: 0 1px 3px 0 rgba(15, 23, 42, 0.04), 0 1px 2px -1px rgba(15, 23, 42, 0.04);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.card-premium:hover {
+  border-color: #CBD5E1;
+  box-shadow: 0 10px 25px -3px rgba(15, 23, 42, 0.06), 0 4px 6px -4px rgba(15, 23, 42, 0.04);
+}
+
+.card-static {
+  background-color: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 1rem;
+  box-shadow: 0 1px 3px 0 rgba(15, 23, 42, 0.04);
+}
+
+/* Focus Rings */
+.focus-ring-blue {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+.focus-ring-blue:focus-visible {
+  outline-color: #2563EB;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+/* Print Optimization for Vehicle Reports & Invoices */
+@media print {
+  body {
+    background-color: #FFFFFF !important;
+    color: #000000 !important;
+  }
+
+  /* Hide app navigation and overlays */
+  nav,
+  aside,
+  header,
+  footer,
+  [role="navigation"],
+  .print\:hidden {
+    display: none !important;
+  }
+
+  /* Make sure background colors and borders render on paper/PDF */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  #autocare-printable-dossier {
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+  }
+}
+
