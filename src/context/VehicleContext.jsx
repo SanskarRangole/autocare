@@ -7,6 +7,7 @@ import {
   deleteVehicle as apiDeleteVehicle,
   seedSampleData,
   clearAllLocalData,
+  syncLocalDataToSupabase,
 } from '../lib/storage'
 
 const VehicleContext = createContext(null)
@@ -100,6 +101,18 @@ export function VehicleProvider({ children }) {
     }
   }
 
+  const handleSyncLocalData = async () => {
+    if (!user) throw new Error('User not authenticated')
+    setLoading(true)
+    try {
+      const result = await syncLocalDataToSupabase(user.id)
+      await loadVehicles()
+      return result
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const activeVehicle = vehicles.find(v => v.id === activeVehicleId) || (vehicles.length > 0 ? vehicles[0] : null)
 
   const value = {
@@ -114,6 +127,7 @@ export function VehicleProvider({ children }) {
     deleteVehicle,
     seedDemoData: handleSeedDemoData,
     clearAllData: handleClearAllData,
+    syncLocalData: handleSyncLocalData,
   }
 
   return <VehicleContext.Provider value={value}>{children}</VehicleContext.Provider>

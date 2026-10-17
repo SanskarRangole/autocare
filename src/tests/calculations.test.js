@@ -7,6 +7,7 @@ import {
   calculateFuelLogMetrics,
   calculateFuelSummary,
   calculateExpenseSummary,
+  calculateVehicleExpenseComparison,
   generateVehicleInsights,
 } from '../lib/utils'
 
@@ -202,6 +203,82 @@ describe('Smart Fuel & Service Calculations', () => {
     const nextDate = new Date(baseDate)
     nextDate.setMonth(nextDate.getMonth() + 6)
     expect(nextDate.toISOString().split('T')[0]).toBe('2026-10-15')
+  })
+})
+
+describe('Multi-Vehicle Expense Comparison Calculations', () => {
+  const vehicles = [
+    { id: 'veh_1', name: 'Honda Civic', type: 'car', current_odometer: 28000 },
+    { id: 'veh_2', name: 'Yamaha MT-07', type: 'motorcycle', current_odometer: 11000 },
+    { id: 'veh_3', name: 'Vespa 150', type: 'scooter', current_odometer: 4000 },
+  ]
+
+  const expenses = [
+    // Honda Civic expenses: Total = $650 ($450 service, $200 fuel)
+    { id: 'e1', vehicle_id: 'veh_1', category: 'Service', amount: 450, date: '2026-08-10' },
+    { id: 'e2', vehicle_id: 'veh_1', category: 'Fuel', amount: 200, date: '2026-09-01' },
+    // Yamaha MT-07 expenses: Total = $250 ($150 fuel, $100 service)
+    { id: 'e3', vehicle_id: 'veh_2', category: 'Fuel', amount: 150, date: '2026-08-15' },
+    { id: 'e4', vehicle_id: 'veh_2', category: 'Service', amount: 100, date: '2026-09-10' },
+    // Vespa 150 expenses: Total = $100 ($100 fuel)
+    { id: 'e5', vehicle_id: 'veh_3', category: 'Fuel', amount: 100, date: '2026-09-12' },
+  ]
+
+  it('correctly ranks and identifies which vehicle expense is more than other multiple vehicles', () => {
+    const result = calculateVehicleExpenseComparison(vehicles, expenses, 'all', 'USD')
+
+    expect(result.ranking.length).toBe(3)
+    // Honda Civic is highest: $650
+    expect(result.highestVehicle.id).toBe('veh_1')
+    expect(result.highestVehicle.totalSpent).toBe(650)
+    expect(result.highestVehicle.rank).toBe(1)
+
+    // Runner up is Yamaha: $250
+    expect(result.runnerUpVehicle.id).toBe('veh_2')
+    expect(result.runnerUpVehicle.totalSpent).toBe(250)
+
+    // Lowest is Vespa: $100
+    expect(result.lowestVehicle.id).toBe('veh_3')
+    expect(result.lowestVehicle.totalSpent).toBe(100)
+
+    // Total fleet spend = $1000
+    expect(result.totalFleetSpent).toBe(1000)
+    expect(result.avgSpent).toBe(333.33)
+
+    // Percentage shares
+    expect(result.highestVehicle.percentageShare).toBe(65) // 650/1000 = 65%
+    expect(result.runnerUpVehicle.percentageShare).toBe(25) // 250/1000 = 25%
+
+    // Difference and percentage higher: Honda Civic vs Yamaha ($400 more, +160%)
+    expect(result.highestVehicle.moreThanNext.name).toBe('Yamaha MT-07')
+    expect(result.highestVehicle.moreThanNext.difference).toBe(400)
+    expect(result.highestVehicle.moreThanNext.percentage).toBe(160)
+
+    // Difference vs lowest: Honda Civic vs Vespa ($550 more, +550%)
+    expect(result.highestVehicle.differenceVsLowest).toBe(550)
+    expect(result.highestVehicle.percentageVsLowest).toBe(550)
+
+    // Top categories per vehicle
+    expect(result.highestVehicle.topCategory.name).toBe('Service')
+    expect(result.highestVehicle.topCategory.amount).toBe(450)
+    expect(result.runnerUpVehicle.topCategory.name).toBe('Fuel')
+    expect(result.runnerUpVehicle.topCategory.amount).toBe(150)
+
+    // Automated insights generated
+    expect(result.insights.length).toBeGreaterThan(0)
+    expect(result.insights[0].title).toContain('Honda Civic is Your Most Expensive Vehicle')
+    expect(result.insights[0].description).toContain('higher than Yamaha MT-07')
+  })
+
+  it('handles empty data or single vehicle gracefully', () => {
+    const emptyResult = calculateVehicleExpenseComparison([], [], 'all')
+    expect(emptyResult.ranking).toEqual([])
+    expect(emptyResult.highestVehicle).toBeNull()
+
+    const singleResult = calculateVehicleExpenseComparison([vehicles[0]], [expenses[0]], 'all')
+    expect(singleResult.ranking.length).toBe(1)
+    expect(singleResult.highestVehicle.id).toBe('veh_1')
+    expect(singleResult.runnerUpVehicle).toBeNull()
   })
 })
 

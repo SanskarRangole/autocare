@@ -33,7 +33,16 @@ export function AuthModal({ isOpen, onClose }) {
         setSuccessMessage(res?.message || 'Password reset link sent to your email address.')
       }
     } catch (err) {
-      setError(err?.message || 'An error occurred during authentication.')
+      const msg = err?.message || 'An error occurred during authentication.'
+      if (msg.includes('already exists') || msg.includes('already registered')) {
+        setTab('login')
+        setError('This email is already registered in Supabase. We switched you to Sign In — please enter your password.')
+      } else if (msg.includes('haven\'t registered yet') || msg.includes('switch to the "Create Account" tab')) {
+        setTab('register')
+        setError('No account found for this email. We switched you to Register — please enter your details.')
+      } else {
+        setError(msg)
+      }
     } finally {
       setLoading(false)
     }
@@ -109,9 +118,35 @@ export function AuthModal({ isOpen, onClose }) {
 
         {/* Error / Success Alerts */}
         {error && (
-          <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2.5 text-rose-800 text-xs">
-            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-            <p className="flex-1 font-medium">{error}</p>
+          <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl flex flex-col gap-2 text-rose-800 text-xs">
+            <div className="flex items-start gap-2.5">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <p className="flex-1 font-medium">{error}</p>
+            </div>
+            {error.includes('Sign In') && tab === 'register' && (
+              <button
+                type="button"
+                onClick={() => {
+                  setTab('login')
+                  setError(null)
+                }}
+                className="self-start text-[11px] font-bold text-[#2563EB] underline hover:text-[#1D4ED8]"
+              >
+                Switch to Sign In →
+              </button>
+            )}
+            {error.includes('Create Account') && tab === 'login' && (
+              <button
+                type="button"
+                onClick={() => {
+                  setTab('register')
+                  setError(null)
+                }}
+                className="self-start text-[11px] font-bold text-[#2563EB] underline hover:text-[#1D4ED8]"
+              >
+                Switch to Register →
+              </button>
+            )}
           </div>
         )}
 

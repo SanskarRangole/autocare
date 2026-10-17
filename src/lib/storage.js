@@ -100,6 +100,8 @@ export async function getCurrentUser() {
     } catch {
       // fallback
     }
+    // When connected to live Supabase, do NOT return mock local users if unauthenticated
+    return null
   }
   const session = getLocalItem('session', null)
   return session?.user || null
@@ -116,9 +118,13 @@ export async function signInDemo() {
 }
 
 export async function signIn({ email, password }) {
+  // Clear offline demo mode so live Supabase is used
   getStorage().removeItem(`${LOCAL_STORAGE_KEY_PREFIX}auth_mode`)
+  getStorage().removeItem(`${LOCAL_STORAGE_KEY_PREFIX}session`)
+
   if (isUsingLiveSupabase()) {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+    const cleanEmail = (email || '').trim().toLowerCase()
+    const { data, error } = await supabase.auth.signInWithPassword({ email: cleanEmail, password })
     if (error) {
       if (error.message?.includes('Email not confirmed')) {
         throw new Error(
@@ -136,7 +142,7 @@ export async function signIn({ email, password }) {
     // Automatically sync email & profile to public.profiles table
     if (data?.user) {
       try {
-        const userEmail = data.user.email || email
+        const userEmail = data.user.email || cleanEmail
         const fullName = data.user.user_metadata?.full_name || userEmail.split('@')[0]
         await supabase.from('profiles').upsert(
           {
@@ -175,16 +181,32 @@ export async function signIn({ email, password }) {
 }
 
 export async function signUp({ email, password, fullName }) {
+  // Clear demo session state before creating real user
   getStorage().removeItem(`${LOCAL_STORAGE_KEY_PREFIX}auth_mode`)
+  getStorage().removeItem(`${LOCAL_STORAGE_KEY_PREFIX}session`)
+
   if (isUsingLiveSupabase()) {
+    const cleanEmail = (email || '').trim().toLowerCase()
+    if (!cleanEmail) {
+      throw new Error('Please enter a valid email address.')
+    }
+    if (!password || password.length < 6) {
+      throw new Error('Password must be at least 6 characters long.')
+    }
+
     const { data, error } = await supabase.auth.signUp({
-      email,
+      email: cleanEmail,
       password,
       options: {
-        data: { full_name: fullName },
+        data: { full_name: fullName || cleanEmail.split('@')[0] },
       },
     })
     if (error) {
+      if (error.message?.includes('User already registered') || error.code === 'user_already_exists') {
+        throw new Error(
+          'An account with this email already exists in Supabase. Switch to the "Sign In" tab to log in.'
+        )
+      }
       if (error.message?.includes('rate limit') || error.code === 'over_email_send_rate_limit') {
         throw new Error(
           'Supabase email confirmation rate limit reached (free tier: 3 emails/hr). In your Supabase Dashboard, go to Authentication > Providers > Email and turn OFF "Confirm email" to enable instant unlimited signups, or click "Instant Demo" to enter immediately.'
@@ -193,10 +215,37 @@ export async function signUp({ email, password, fullName }) {
       throw error
     }
 
-    // If user was created, immediately sync to public.profiles
+    // Handle Supabase case where existing user returns obfuscated user with 0 identities
+    if (data?.user?.identities && data.user.identities.length === 0) {
+      throw new Error(
+        'An account with this email already exists in Supabase. Switch to the "Sign In" tab to log in.'
+      )
+    }
+
+    let finalSession = data?.session
+    // If Supabase created user but session is null (e.g. project setting), attempt instant login
+    if (data?.user && !finalSession) {
+      try {
+        const loginRes = await supabase.auth.signInWithPassword({ email: cleanEmail, password })
+        if (loginRes.data?.session) {
+          finalSession = loginRes.data.session
+        } else if (loginRes.error?.message?.includes('Email not confirmed')) {
+          throw new Error(
+            'Your account was created in Supabase! However, "Confirm email" is currently ON in your Supabase project. Check your inbox or turn OFF "Confirm email" in Supabase Dashboard > Authentication > Providers > Email to log in instantly.'
+          )
+        }
+      } catch (loginErr) {
+        if (loginErr.message?.includes('Supabase Dashboard')) {
+          throw loginErr
+        }
+        console.warn('Instant login after signup attempt:', loginErr)
+      }
+    }
+
+    // Immediately sync to public.profiles
     if (data?.user) {
       try {
-        const userEmail = data.user.email || email
+        const userEmail = data.user.email || cleanEmail
         const name = fullName || data.user.user_metadata?.full_name || userEmail.split('@')[0]
         await supabase.from('profiles').upsert(
           {
@@ -212,29 +261,9 @@ export async function signUp({ email, password, fullName }) {
       }
     }
 
-    // If Supabase created user but session is null (email confirmation requirement enabled)
-    if (data?.user) {
-      if (!data.session) {
-        try {
-          const loginRes = await supabase.auth.signInWithPassword({ email, password })
-          if (loginRes.data?.session) {
-            return loginRes.data
-          }
-        } catch (loginErr) {
-          // If Supabase requires email verification, seamlessly establish an authenticated session
-          // so the user is immediately redirected to their dashboard without getting stuck
-          const autoSession = {
-            access_token: `sb_auto_${Date.now()}`,
-            user: data.user,
-          }
-          setLocalItem('session', autoSession)
-          return { user: data.user, session: autoSession }
-        }
-      }
-      return data
-    }
-    return data
+    return { user: data.user, session: finalSession || data.session }
   }
+
   const users = getLocalItem('registered_users', [DEFAULT_DEMO_USER])
   const existing = users.find(u => u.email.toLowerCase() === email.toLowerCase())
   if (existing) {
@@ -397,34 +426,179 @@ function createLocalVehicle(userId, vehicleData) {
   return newVehicle
 }
 
-function sanitizeVehiclePayload(vehicleData) {
-  const sanitized = { ...vehicleData }
+function sanitizeVehiclePayload(vehicleData = {}) {
+  const allowed = [
+    'name', 'type', 'make', 'model', 'year', 'license_plate',
+    'vin', 'fuel_type', 'current_odometer', 'photo_url',
+    'insurance_provider', 'insurance_policy_no', 'insurance_expiry',
+    'puc_number', 'puc_expiry', 'notes'
+  ]
+  const data = vehicleData || {}
+  const sanitized = {}
+  allowed.forEach(key => {
+    if (data[key] !== undefined) {
+      sanitized[key] = data[key]
+    }
+  })
+  if (sanitized.year !== undefined) {
+    sanitized.year = parseInt(sanitized.year, 10) || new Date().getFullYear()
+  }
+  if (sanitized.current_odometer !== undefined) {
+    sanitized.current_odometer = sanitized.current_odometer === '' || sanitized.current_odometer == null ? 0 : Number(sanitized.current_odometer)
+  }
   if (sanitized.insurance_expiry === '') sanitized.insurance_expiry = null
   if (sanitized.puc_expiry === '') sanitized.puc_expiry = null
   return sanitized
 }
 
-export async function createVehicle(userId, vehicleData) {
+function sanitizeServicePayload(serviceData) {
+  const allowed = [
+    'date', 'odometer', 'service_type', 'garage', 'cost',
+    'notes', 'next_due_date', 'next_due_odometer'
+  ]
+  const sanitized = {}
+  allowed.forEach(key => {
+    if (serviceData[key] !== undefined) {
+      sanitized[key] = serviceData[key]
+    }
+  })
+  if (sanitized.cost !== undefined) {
+    sanitized.cost = Number(sanitized.cost) || 0
+  }
+  if (sanitized.odometer !== undefined) {
+    sanitized.odometer = sanitized.odometer === '' || sanitized.odometer == null ? null : Number(sanitized.odometer)
+  }
+  if (sanitized.next_due_odometer !== undefined) {
+    sanitized.next_due_odometer = sanitized.next_due_odometer === '' || sanitized.next_due_odometer == null ? null : Number(sanitized.next_due_odometer)
+  }
+  if (sanitized.next_due_date === '') sanitized.next_due_date = null
+  return sanitized
+}
+
+function sanitizeFuelLogPayload(logData) {
+  const allowed = [
+    'date', 'odometer', 'litres', 'total_cost',
+    'is_full_tank', 'missed_previous_fill', 'fuel_brand', 'notes'
+  ]
+  const sanitized = {}
+  allowed.forEach(key => {
+    if (logData[key] !== undefined) {
+      sanitized[key] = logData[key]
+    }
+  })
+  if (sanitized.odometer !== undefined) {
+    sanitized.odometer = sanitized.odometer === '' || sanitized.odometer == null ? 0 : Number(sanitized.odometer)
+  }
+  if (sanitized.litres !== undefined) {
+    sanitized.litres = sanitized.litres === '' || sanitized.litres == null ? 0 : Number(sanitized.litres)
+  }
+  if (sanitized.total_cost !== undefined) {
+    sanitized.total_cost = sanitized.total_cost === '' || sanitized.total_cost == null ? 0 : Number(sanitized.total_cost)
+  }
+  if (sanitized.is_full_tank !== undefined) {
+    sanitized.is_full_tank = Boolean(sanitized.is_full_tank)
+  }
+  if (sanitized.missed_previous_fill !== undefined) {
+    sanitized.missed_previous_fill = Boolean(sanitized.missed_previous_fill)
+  }
+  return sanitized
+}
+
+function sanitizeExpensePayload(expenseData) {
+  const allowed = [
+    'category', 'amount', 'date', 'description', 'reference_type', 'reference_id'
+  ]
+  const sanitized = {}
+  allowed.forEach(key => {
+    if (expenseData[key] !== undefined) {
+      sanitized[key] = expenseData[key]
+    }
+  })
+  if (sanitized.amount !== undefined) {
+    sanitized.amount = Number(sanitized.amount) || 0
+  }
+  if (sanitized.reference_type === undefined) {
+    sanitized.reference_type = 'standalone'
+  }
+  if (sanitized.reference_id === '') sanitized.reference_id = null
+  return sanitized
+}
+
+function sanitizeReminderPayload(reminderData) {
+  const allowed = [
+    'title', 'category', 'due_date', 'due_odometer',
+    'is_completed', 'completed_date', 'notes'
+  ]
+  const sanitized = {}
+  allowed.forEach(key => {
+    if (reminderData[key] !== undefined) {
+      sanitized[key] = reminderData[key]
+    }
+  })
+  if (sanitized.due_date === '') sanitized.due_date = null
+  if (sanitized.due_odometer !== undefined) {
+    sanitized.due_odometer = sanitized.due_odometer === '' || sanitized.due_odometer == null ? null : Number(sanitized.due_odometer)
+  }
+  if (sanitized.is_completed !== undefined) {
+    sanitized.is_completed = Boolean(sanitized.is_completed)
+  }
+  if (sanitized.completed_date === '') sanitized.completed_date = null
+  return sanitized
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+async function resolveAuthUserId(providedId) {
+  if (providedId && UUID_PATTERN.test(providedId)) {
+    return providedId
+  }
+  if (isUsingLiveSupabase() && supabase?.auth?.getUser) {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user && UUID_PATTERN.test(user.id)) {
+        return user.id
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return providedId
+}
+
+export async function createVehicle(userIdOrData, maybeData) {
+  let userId
+  let vehicleData
+  if (maybeData !== undefined) {
+    userId = userIdOrData
+    vehicleData = maybeData || {}
+  } else if (typeof userIdOrData === 'object' && userIdOrData !== null) {
+    vehicleData = userIdOrData
+    userId = vehicleData.user_id || 'usr_default'
+  } else {
+    userId = userIdOrData
+    vehicleData = {}
+  }
   const payload = sanitizeVehiclePayload(vehicleData)
   if (isUsingLiveSupabase()) {
+    const effectiveUserId = await resolveAuthUserId(userId)
     try {
       const { data, error } = await supabase
         .from('vehicles')
-        .insert({ ...payload, user_id: userId })
+        .insert({ ...payload, user_id: effectiveUserId })
         .select()
         .single()
       if (!error && data) return data
       if (error) {
         if (error.code === '42501' || error.message?.includes('row-level security') || error.message?.includes('violates row-level security')) {
           console.warn('RLS restriction detected. Preserving vehicle locally.', error.message)
-          return createLocalVehicle(userId, payload)
+          return createLocalVehicle(effectiveUserId, payload)
         }
         throw error
       }
     } catch (err) {
       if (err.code === '42501' || err.message?.includes('row-level security') || err.message?.includes('violates row-level security')) {
         console.warn('RLS restriction detected. Preserving vehicle locally.', err.message)
-        return createLocalVehicle(userId, payload)
+        return createLocalVehicle(effectiveUserId, payload)
       }
       throw err
     }
@@ -499,12 +673,14 @@ export async function getServices(vehicleId) {
 }
 
 export async function createService(userId, vehicleId, serviceData) {
-  const cost = Number(serviceData.cost) || 0
+  const payload = sanitizeServicePayload(serviceData)
+  const cost = payload.cost || 0
 
   if (isUsingLiveSupabase()) {
+    const effectiveUserId = await resolveAuthUserId(userId)
     const { data: service, error: sErr } = await supabase
       .from('services')
-      .insert({ ...serviceData, user_id: userId, vehicle_id: vehicleId })
+      .insert({ ...payload, user_id: effectiveUserId, vehicle_id: vehicleId })
       .select()
       .single()
     if (sErr) throw sErr
@@ -512,20 +688,20 @@ export async function createService(userId, vehicleId, serviceData) {
     // Automatically create corresponding expense to prevent duplicates
     if (cost > 0) {
       await supabase.from('expenses').insert({
-        user_id: userId,
+        user_id: effectiveUserId,
         vehicle_id: vehicleId,
         category: 'Service',
         amount: cost,
-        date: serviceData.date,
-        description: `${serviceData.service_type}${serviceData.garage ? ` @ ${serviceData.garage}` : ''}`,
+        date: payload.date,
+        description: `${payload.service_type}${payload.garage ? ` @ ${payload.garage}` : ''}`,
         reference_type: 'service',
         reference_id: service.id,
       })
     }
 
     // Auto-update vehicle odometer if higher
-    if (serviceData.odometer) {
-      await autoUpdateVehicleOdometer(vehicleId, serviceData.odometer)
+    if (payload.odometer) {
+      await autoUpdateVehicleOdometer(vehicleId, payload.odometer)
     }
 
     return service
@@ -537,7 +713,7 @@ export async function createService(userId, vehicleId, serviceData) {
     id: `srv_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
     user_id: userId,
     vehicle_id: vehicleId,
-    ...serviceData,
+    ...payload,
     cost,
     created_at: new Date().toISOString(),
   }
@@ -553,8 +729,8 @@ export async function createService(userId, vehicleId, serviceData) {
       vehicle_id: vehicleId,
       category: 'Service',
       amount: cost,
-      date: serviceData.date,
-      description: `${serviceData.service_type}${serviceData.garage ? ` @ ${serviceData.garage}` : ''}`,
+      date: payload.date,
+      description: `${payload.service_type}${payload.garage ? ` @ ${payload.garage}` : ''}`,
       reference_type: 'service',
       reference_id: newService.id,
       created_at: new Date().toISOString(),
@@ -562,20 +738,21 @@ export async function createService(userId, vehicleId, serviceData) {
     setLocalItem('expenses', expenses)
   }
 
-  if (serviceData.odometer) {
-    await autoUpdateVehicleOdometer(vehicleId, serviceData.odometer)
+  if (payload.odometer) {
+    await autoUpdateVehicleOdometer(vehicleId, payload.odometer)
   }
 
   return newService
 }
 
 export async function updateService(serviceId, updates) {
-  const cost = Number(updates.cost) || 0
+  const payload = sanitizeServicePayload(updates)
+  const cost = payload.cost || 0
 
   if (isUsingLiveSupabase()) {
     const { data, error } = await supabase
       .from('services')
-      .update({ ...updates, updated_at: new Date().toISOString() })
+      .update({ ...payload, updated_at: new Date().toISOString() })
       .eq('id', serviceId)
       .select()
       .single()
@@ -586,8 +763,8 @@ export async function updateService(serviceId, updates) {
       .from('expenses')
       .update({
         amount: cost,
-        date: updates.date,
-        description: `${updates.service_type || 'Service'}${updates.garage ? ` @ ${updates.garage}` : ''}`,
+        date: payload.date,
+        description: `${payload.service_type || 'Service'}${payload.garage ? ` @ ${payload.garage}` : ''}`,
       })
       .eq('reference_type', 'service')
       .eq('reference_id', serviceId)
@@ -599,7 +776,7 @@ export async function updateService(serviceId, updates) {
   const index = services.findIndex(s => s.id === serviceId)
   if (index === -1) throw new Error('Service record not found')
 
-  services[index] = { ...services[index], ...updates, cost, updated_at: new Date().toISOString() }
+  services[index] = { ...services[index], ...payload, cost, updated_at: new Date().toISOString() }
   setLocalItem('services', services)
 
   // Sync linked expense
@@ -609,8 +786,8 @@ export async function updateService(serviceId, updates) {
     expenses[expIdx] = {
       ...expenses[expIdx],
       amount: cost,
-      date: updates.date || expenses[expIdx].date,
-      description: `${updates.service_type || 'Service'}${updates.garage ? ` @ ${updates.garage}` : ''}`,
+      date: payload.date || expenses[expIdx].date,
+      description: `${payload.service_type || 'Service'}${payload.garage ? ` @ ${payload.garage}` : ''}`,
     }
     setLocalItem('expenses', expenses)
   }
@@ -652,23 +829,23 @@ export async function getFuelLogs(vehicleId) {
 }
 
 export async function createFuelLog(userId, vehicleId, logData) {
-  const totalCost = Number(logData.total_cost) || 0
-  const litres = Number(logData.litres) || 0
+  const payload = sanitizeFuelLogPayload(logData)
+  const totalCost = payload.total_cost || 0
+  const litres = payload.litres || 0
   const pricePerLitre = litres > 0 ? Number((totalCost / litres).toFixed(3)) : 0
   const isSpendingOnly = Boolean(logData.is_spending_only || litres <= 0)
 
   const expenseDesc = litres > 0
-    ? `Fuel Fill: ${litres} L${logData.odometer ? ` (${Number(logData.odometer).toLocaleString()} km)` : ''}`
-    : `Fuel Expense${logData.fuel_brand ? ` @ ${logData.fuel_brand}` : ''}`
+    ? `Fuel Fill: ${litres} L${payload.odometer ? ` (${Number(payload.odometer).toLocaleString()} km)` : ''}`
+    : `Fuel Expense${payload.fuel_brand ? ` @ ${payload.fuel_brand}` : ''}`
 
   if (isUsingLiveSupabase()) {
+    const effectiveUserId = await resolveAuthUserId(userId)
     const { data: fuelLog, error: fErr } = await supabase
       .from('fuel_logs')
       .insert({
-        ...logData,
-        total_cost: totalCost,
-        litres: litres,
-        user_id: userId,
+        ...payload,
+        user_id: effectiveUserId,
         vehicle_id: vehicleId,
       })
       .select()
@@ -678,19 +855,19 @@ export async function createFuelLog(userId, vehicleId, logData) {
     // Automatically create corresponding expense to prevent duplicates
     if (totalCost > 0) {
       await supabase.from('expenses').insert({
-        user_id: userId,
+        user_id: effectiveUserId,
         vehicle_id: vehicleId,
         category: 'Fuel',
         amount: totalCost,
-        date: logData.date,
+        date: payload.date,
         description: expenseDesc,
         reference_type: 'fuel',
         reference_id: fuelLog.id,
       })
     }
 
-    if (!isSpendingOnly && logData.odometer && Number(logData.odometer) > 0) {
-      await autoUpdateVehicleOdometer(vehicleId, logData.odometer)
+    if (!isSpendingOnly && payload.odometer && Number(payload.odometer) > 0) {
+      await autoUpdateVehicleOdometer(vehicleId, payload.odometer)
     }
 
     return fuelLog
@@ -701,9 +878,8 @@ export async function createFuelLog(userId, vehicleId, logData) {
     id: `fuel_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
     user_id: userId,
     vehicle_id: vehicleId,
-    ...logData,
-    total_cost: totalCost,
-    litres: litres,
+    ...payload,
+    is_spending_only: isSpendingOnly,
     price_per_litre: pricePerLitre,
     created_at: new Date().toISOString(),
   }
@@ -719,7 +895,7 @@ export async function createFuelLog(userId, vehicleId, logData) {
       vehicle_id: vehicleId,
       category: 'Fuel',
       amount: totalCost,
-      date: logData.date,
+      date: payload.date,
       description: expenseDesc,
       reference_type: 'fuel',
       reference_id: newFuelLog.id,
@@ -728,25 +904,24 @@ export async function createFuelLog(userId, vehicleId, logData) {
     setLocalItem('expenses', expenses)
   }
 
-  if (!isSpendingOnly && logData.odometer && Number(logData.odometer) > 0) {
-    await autoUpdateVehicleOdometer(vehicleId, logData.odometer)
+  if (!isSpendingOnly && payload.odometer && Number(payload.odometer) > 0) {
+    await autoUpdateVehicleOdometer(vehicleId, payload.odometer)
   }
 
   return newFuelLog
 }
 
 export async function updateFuelLog(fuelLogId, updates) {
-  const totalCost = Number(updates.total_cost) || 0
-  const litres = Number(updates.litres) || 0
+  const payload = sanitizeFuelLogPayload(updates)
+  const totalCost = payload.total_cost || 0
+  const litres = payload.litres || 0
   const pricePerLitre = litres > 0 ? Number((totalCost / litres).toFixed(3)) : 0
 
   if (isUsingLiveSupabase()) {
     const { data, error } = await supabase
       .from('fuel_logs')
       .update({
-        ...updates,
-        total_cost: totalCost,
-        litres: litres,
+        ...payload,
       })
       .eq('id', fuelLogId)
       .select()
@@ -758,8 +933,8 @@ export async function updateFuelLog(fuelLogId, updates) {
       .from('expenses')
       .update({
         amount: totalCost,
-        date: updates.date,
-        description: `Fuel Fill: ${litres} L (${Number(updates.odometer).toLocaleString()} km)`,
+        date: payload.date,
+        description: `Fuel Fill: ${litres} L (${Number(payload.odometer).toLocaleString()} km)`,
       })
       .eq('reference_type', 'fuel')
       .eq('reference_id', fuelLogId)
@@ -773,9 +948,7 @@ export async function updateFuelLog(fuelLogId, updates) {
 
   fuelLogs[index] = {
     ...fuelLogs[index],
-    ...updates,
-    total_cost: totalCost,
-    litres: litres,
+    ...payload,
     price_per_litre: pricePerLitre,
   }
   setLocalItem('fuel_logs', fuelLogs)
@@ -786,8 +959,8 @@ export async function updateFuelLog(fuelLogId, updates) {
     expenses[expIdx] = {
       ...expenses[expIdx],
       amount: totalCost,
-      date: updates.date || expenses[expIdx].date,
-      description: `Fuel Fill: ${litres} L (${Number(updates.odometer).toLocaleString()} km)`,
+      date: payload.date || expenses[expIdx].date,
+      description: `Fuel Fill: ${litres} L (${Number(payload.odometer).toLocaleString()} km)`,
     }
     setLocalItem('expenses', expenses)
   }
@@ -827,19 +1000,34 @@ export async function getExpenses(vehicleId) {
   return expenses.filter(e => e.vehicle_id === vehicleId).sort((a, b) => new Date(b.date) - new Date(a.date))
 }
 
+export async function getAllExpenses(userId) {
+  if (isUsingLiveSupabase()) {
+    const effectiveUserId = await resolveAuthUserId(userId)
+    const { data, error } = await supabase
+      .from('expenses')
+      .select('*')
+      .eq('user_id', effectiveUserId)
+      .order('date', { ascending: false })
+    if (error) throw error
+    return data || []
+  }
+  const expenses = getLocalItem('expenses', [])
+  return expenses
+    .filter(e => !userId || e.user_id === userId)
+    .sort((a, b) => new Date(b.date) - new Date(a.date))
+}
+
 export async function createExpense(userId, vehicleId, expenseData) {
-  const amount = Number(expenseData.amount) || 0
+  const payload = sanitizeExpensePayload(expenseData)
 
   if (isUsingLiveSupabase()) {
+    const effectiveUserId = await resolveAuthUserId(userId)
     const { data, error } = await supabase
       .from('expenses')
       .insert({
-        ...expenseData,
-        amount,
-        user_id: userId,
+        ...payload,
+        user_id: effectiveUserId,
         vehicle_id: vehicleId,
-        reference_type: expenseData.reference_type || 'standalone',
-        reference_id: expenseData.reference_id || null,
       })
       .select()
       .single()
@@ -852,10 +1040,7 @@ export async function createExpense(userId, vehicleId, expenseData) {
     id: `exp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
     user_id: userId,
     vehicle_id: vehicleId,
-    ...expenseData,
-    amount,
-    reference_type: expenseData.reference_type || 'standalone',
-    reference_id: expenseData.reference_id || null,
+    ...payload,
     created_at: new Date().toISOString(),
   }
   expenses.unshift(newExpense)
@@ -864,12 +1049,12 @@ export async function createExpense(userId, vehicleId, expenseData) {
 }
 
 export async function updateExpense(expenseId, updates) {
-  const amount = Number(updates.amount) || 0
+  const payload = sanitizeExpensePayload(updates)
 
   if (isUsingLiveSupabase()) {
     const { data, error } = await supabase
       .from('expenses')
-      .update({ ...updates, amount })
+      .update(payload)
       .eq('id', expenseId)
       .select()
       .single()
@@ -881,7 +1066,7 @@ export async function updateExpense(expenseId, updates) {
   const index = expenses.findIndex(e => e.id === expenseId)
   if (index === -1) throw new Error('Expense not found')
 
-  expenses[index] = { ...expenses[index], ...updates, amount }
+  expenses[index] = { ...expenses[index], ...payload }
   setLocalItem('expenses', expenses)
   return expenses[index]
 }
@@ -919,10 +1104,13 @@ export async function getReminders(vehicleId) {
 }
 
 export async function createReminder(userId, vehicleId, reminderData) {
+  const payload = sanitizeReminderPayload(reminderData)
+
   if (isUsingLiveSupabase()) {
+    const effectiveUserId = await resolveAuthUserId(userId)
     const { data, error } = await supabase
       .from('reminders')
-      .insert({ ...reminderData, user_id: userId, vehicle_id: vehicleId })
+      .insert({ ...payload, user_id: effectiveUserId, vehicle_id: vehicleId })
       .select()
       .single()
     if (error) throw error
@@ -933,7 +1121,7 @@ export async function createReminder(userId, vehicleId, reminderData) {
     id: `rem_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
     user_id: userId,
     vehicle_id: vehicleId,
-    ...reminderData,
+    ...payload,
     is_completed: false,
     created_at: new Date().toISOString(),
   }
@@ -972,10 +1160,12 @@ export async function toggleReminderStatus(reminderId, isCompleted) {
 }
 
 export async function updateReminder(reminderId, updates) {
+  const payload = sanitizeReminderPayload(updates)
+
   if (isUsingLiveSupabase()) {
     const { data, error } = await supabase
       .from('reminders')
-      .update({ ...updates, updated_at: new Date().toISOString() })
+      .update({ ...payload, updated_at: new Date().toISOString() })
       .eq('id', reminderId)
       .select()
       .single()
@@ -985,7 +1175,7 @@ export async function updateReminder(reminderId, updates) {
   const reminders = getLocalItem('reminders', [])
   const index = reminders.findIndex(r => r.id === reminderId)
   if (index === -1) throw new Error('Reminder not found')
-  reminders[index] = { ...reminders[index], ...updates, updated_at: new Date().toISOString() }
+  reminders[index] = { ...reminders[index], ...payload, updated_at: new Date().toISOString() }
   setLocalItem('reminders', reminders)
   return reminders[index]
 }
@@ -1018,10 +1208,12 @@ export async function getDocuments(vehicleId) {
   return docs.filter(d => d.vehicle_id === vehicleId)
 }
 
-export async function uploadDocument(userId, vehicleId, file, meta) {
-  const fileExt = file.name.split('.').pop()
-  const cleanFileName = `${Date.now()}_${file.name.replace(/\s+/g, '_')}`
-  const filePath = `${userId}/${vehicleId}/${cleanFileName}`
+export async function uploadDocument(userId, vehicleId, file, meta = {}) {
+  const fileExt = file.name ? file.name.split('.').pop() : 'pdf'
+  const cleanFileName = `${Date.now()}_${(file.name || 'document').replace(/\s+/g, '_')}`
+  const effectiveUserId = await resolveAuthUserId(userId)
+  const filePath = `${effectiveUserId}/${vehicleId}/${cleanFileName}`
+  const expiryDate = meta.expiry_date && meta.expiry_date !== '' ? meta.expiry_date : null
 
   if (isUsingLiveSupabase()) {
     // 1. Upload to Supabase Storage private bucket
@@ -1034,15 +1226,15 @@ export async function uploadDocument(userId, vehicleId, file, meta) {
     const { data, error: dbError } = await supabase
       .from('documents')
       .insert({
-        user_id: userId,
+        user_id: effectiveUserId,
         vehicle_id: vehicleId,
-        name: meta.name || file.name,
+        name: meta.name || file.name || 'Vehicle Document',
         type: meta.type || 'Other',
         file_path: filePath,
-        file_name: file.name,
-        file_size: file.size,
+        file_name: file.name || cleanFileName,
+        file_size: file.size || 0,
         file_type: file.type || fileExt,
-        expiry_date: meta.expiry_date || null,
+        expiry_date: expiryDate,
         notes: meta.notes || null,
       })
       .select()
@@ -1058,13 +1250,13 @@ export async function uploadDocument(userId, vehicleId, file, meta) {
     id: `doc_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
     user_id: userId,
     vehicle_id: vehicleId,
-    name: meta.name || file.name,
+    name: meta.name || file.name || 'Vehicle Document',
     type: meta.type || 'Other',
     file_path: filePath,
-    file_name: file.name,
-    file_size: file.size,
+    file_name: file.name || cleanFileName,
+    file_size: file.size || 0,
     file_type: file.type || fileExt,
-    expiry_date: meta.expiry_date || null,
+    expiry_date: expiryDate,
     notes: meta.notes || null,
     mock_url: base64Data,
     created_at: new Date().toISOString(),
@@ -1088,11 +1280,14 @@ export async function getDocumentSignedUrl(document) {
 }
 
 export async function updateDocument(documentId, updates) {
+  const payload = { ...updates }
+  if (payload.expiry_date === '') payload.expiry_date = null
+
   if (isUsingLiveSupabase()) {
     const { data, error } = await supabase
       .from('documents')
       .update({
-        ...updates,
+        ...payload,
         updated_at: new Date().toISOString(),
       })
       .eq('id', documentId)
@@ -1106,7 +1301,7 @@ export async function updateDocument(documentId, updates) {
   if (index === -1) throw new Error('Document not found')
   docs[index] = {
     ...docs[index],
-    ...updates,
+    ...payload,
     updated_at: new Date().toISOString(),
   }
   setLocalItem('documents', docs)
@@ -1416,6 +1611,69 @@ export async function seedSampleData(userId) {
   })
 
   return { car, bike }
+}
+
+/**
+ * Synchronize all local fleet records (vehicles, services, fuel logs, expenses, reminders)
+ * to live Supabase PostgreSQL for the current authenticated user.
+ */
+export async function syncLocalDataToSupabase(userId) {
+  if (!isUsingLiveSupabase() || !userId) {
+    throw new Error('Supabase live mode and authenticated user session required to sync.')
+  }
+
+  const localVehicles = getLocalItem('vehicles', [])
+  if (!localVehicles || localVehicles.length === 0) {
+    return { syncedVehicles: 0, syncedRecords: 0, message: 'No local vehicles found to sync.' }
+  }
+
+  let syncedVehicles = 0
+  let syncedRecords = 0
+
+  for (const localVeh of localVehicles) {
+    // 1. Create vehicle in Supabase
+    const newVeh = await createVehicle(userId, localVeh)
+    if (!newVeh || !newVeh.id) continue
+    syncedVehicles++
+
+    const oldVehId = localVeh.id
+
+    // 2. Sync services for this vehicle
+    const localServices = getLocalItem('services', []).filter(s => s.vehicle_id === oldVehId)
+    for (const s of localServices) {
+      await createService(userId, newVeh.id, s)
+      syncedRecords++
+    }
+
+    // 3. Sync fuel logs
+    const localFuel = getLocalItem('fuel_logs', []).filter(f => f.vehicle_id === oldVehId)
+    for (const f of localFuel) {
+      await createFuelLog(userId, newVeh.id, f)
+      syncedRecords++
+    }
+
+    // 4. Sync standalone expenses
+    const localExpenses = getLocalItem('expenses', []).filter(
+      e => e.vehicle_id === oldVehId && e.reference_type === 'standalone'
+    )
+    for (const exp of localExpenses) {
+      await createExpense(userId, newVeh.id, exp)
+      syncedRecords++
+    }
+
+    // 5. Sync reminders
+    const localReminders = getLocalItem('reminders', []).filter(r => r.vehicle_id === oldVehId)
+    for (const rem of localReminders) {
+      await createReminder(userId, newVeh.id, rem)
+      syncedRecords++
+    }
+  }
+
+  return {
+    syncedVehicles,
+    syncedRecords,
+    message: `Successfully synchronized ${syncedVehicles} vehicles and ${syncedRecords} records to Supabase!`,
+  }
 }
 
 /**

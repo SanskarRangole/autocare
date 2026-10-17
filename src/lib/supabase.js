@@ -24,7 +24,7 @@ export function isOfflineDemoForced() {
   return (
     import.meta.env.VITE_ENABLE_OFFLINE_DEMO === 'true' ||
     import.meta.env.MODE === 'test' ||
-    process.env.NODE_ENV === 'test'
+    (typeof process !== 'undefined' && process?.env?.NODE_ENV === 'test')
   )
 }
 

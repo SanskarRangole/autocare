@@ -18,10 +18,11 @@ import {
   ShieldCheck,
   ShieldAlert,
   Fuel,
+  TrendingUp,
 } from 'lucide-react'
 import { getDaysDifference, formatDate } from '../../lib/utils'
 
-export function VehicleList({ onOpenAddModal, onEditVehicle }) {
+export function VehicleList({ onOpenAddModal, onEditVehicle, onNavigate }) {
   const { vehicles, activeVehicleId, selectVehicle, deleteVehicle, seedDemoData } = useVehicles()
   const [vehicleToDelete, setVehicleToDelete] = useState(null)
   const [deleting, setDeleting] = useState(false)
@@ -50,6 +51,17 @@ export function VehicleList({ onOpenAddModal, onEditVehicle }) {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          {vehicles.length > 1 && onNavigate && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onNavigate('expenses', 'comparison')}
+              className="text-[#17365D] border-[#CBD5E1] bg-white hover:bg-[#F8FAFC]"
+            >
+              <TrendingUp className="w-3.5 h-3.5 mr-1.5 text-[#2563EB]" />
+              Compare Expenses
+            </Button>
+          )}
           {vehicles.length === 0 && (
             <Button variant="outline" size="sm" onClick={seedDemoData}>
               <Sparkles className="w-3.5 h-3.5 mr-1.5 text-[#2563EB]" />

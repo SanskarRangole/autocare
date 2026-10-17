@@ -35,6 +35,15 @@ export function HomePage() {
   const [error, setError] = useState(null)
   const [successMsg, setSuccessMsg] = useState(null)
 
+  // On home page mount, ensure any stale offline demo session flag is removed
+  React.useEffect(() => {
+    try {
+      localStorage.removeItem('autocare_auth_mode')
+    } catch {
+      // ignore
+    }
+  }, [])
+
   const handleAuthSubmit = async (e) => {
     e.preventDefault()
     setError(null)
@@ -48,7 +57,16 @@ export function HomePage() {
         await signUp({ email, password, fullName })
       }
     } catch (err) {
-      setError(err?.message || 'Authentication failed. Please verify your credentials.')
+      const msg = err?.message || 'Authentication failed. Please verify your credentials.'
+      if (msg.includes('already exists') || msg.includes('already registered')) {
+        setAuthTab('login')
+        setError('This email is already registered in Supabase. We switched you to Sign In — please enter your password to continue.')
+      } else if (msg.includes('haven\'t registered yet') || msg.includes('switch to the "Create Account" tab')) {
+        setAuthTab('register')
+        setError('No account found for this email. We switched you to Create Account — please complete registration.')
+      } else {
+        setError(msg)
+      }
     } finally {
       setLoading(false)
     }
@@ -231,9 +249,35 @@ export function HomePage() {
 
                 {/* Alerts */}
                 {error && (
-                  <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2.5 text-rose-800 text-xs">
-                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                    <span className="flex-1 font-medium">{error}</span>
+                  <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl flex flex-col gap-2 text-rose-800 text-xs">
+                    <div className="flex items-start gap-2.5">
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                      <span className="flex-1 font-medium">{error}</span>
+                    </div>
+                    {error.includes('Sign In') && authTab === 'register' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAuthTab('login')
+                          setError(null)
+                        }}
+                        className="self-start text-[11px] font-bold text-[#2563EB] underline hover:text-[#1D4ED8]"
+                      >
+                        Switch to Sign In →
+                      </button>
+                    )}
+                    {error.includes('Create Account') && authTab === 'login' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAuthTab('register')
+                          setError(null)
+                        }}
+                        className="self-start text-[11px] font-bold text-[#2563EB] underline hover:text-[#1D4ED8]"
+                      >
+                        Switch to Create Account →
+                      </button>
+                    )}
                   </div>
                 )}
 

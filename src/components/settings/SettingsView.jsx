@@ -27,7 +27,7 @@ export function SettingsView() {
     updateProfile,
     isLiveDatabase,
   } = useAuth()
-  const { seedDemoData, clearAllData } = useVehicles()
+  const { seedDemoData, clearAllData, syncLocalData } = useVehicles()
 
   const [fullName, setFullName] = useState(profile?.full_name || '')
   const [currency, setCurrency] = useState(profile?.currency || 'USD')
@@ -38,6 +38,21 @@ export function SettingsView() {
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [confirmClearOpen, setConfirmClearOpen] = useState(false)
   const [isClearing, setIsClearing] = useState(false)
+  const [isSyncing, setIsSyncing] = useState(false)
+  const [syncStatus, setSyncStatus] = useState(null)
+
+  const handleSyncToSupabase = async () => {
+    setIsSyncing(true)
+    setSyncStatus(null)
+    try {
+      const res = await syncLocalData()
+      setSyncStatus({ success: true, message: res.message })
+    } catch (err) {
+      setSyncStatus({ success: false, message: err.message || 'Failed to sync with Supabase' })
+    } finally {
+      setIsSyncing(false)
+    }
+  }
 
   const handleSavePreferences = async (e) => {
     e.preventDefault()
@@ -209,6 +224,32 @@ export function SettingsView() {
               Environment keys are configured via <code className="bg-[#F1F5F9] text-[#17365D] font-semibold px-1.5 py-0.5 rounded text-[11px]">VITE_SUPABASE_URL</code> and <code className="bg-[#F1F5F9] text-[#17365D] font-semibold px-1.5 py-0.5 rounded text-[11px]">VITE_SUPABASE_ANON_KEY</code>. Schema migrations reside in <code className="bg-[#F1F5F9] text-[#17365D] font-semibold px-1.5 py-0.5 rounded text-[11px]">supabase/schema.sql</code>.
             </p>
           </div>
+
+          {isLiveDatabase && (
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-xl border border-blue-200 bg-blue-50/50">
+              <div>
+                <div className="text-sm font-bold text-[#0F172A]">Sync Local Fleet to Supabase</div>
+                <div className="text-xs text-[#64748B] mt-0.5">
+                  Push your offline demo vehicles, service records, fuel logs, and reminders directly into your cloud Supabase database.
+                </div>
+                {syncStatus && (
+                  <div className={`text-xs mt-2 font-medium ${syncStatus.success ? 'text-emerald-700' : 'text-rose-700'}`}>
+                    {syncStatus.message}
+                  </div>
+                )}
+              </div>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={handleSyncToSupabase}
+                loading={isSyncing}
+                className="shrink-0 font-semibold text-xs"
+              >
+                <Layers className="w-4 h-4 mr-1.5" />
+                Sync to Supabase
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 

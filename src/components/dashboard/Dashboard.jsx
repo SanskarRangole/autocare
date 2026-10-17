@@ -6,6 +6,7 @@ import {
   getFuelLogs,
   getReminders,
   getExpenses,
+  getAllExpenses,
   getDocuments,
   getVehicleTimeline,
   createFuelLog,
@@ -41,12 +42,15 @@ import {
   Calendar,
   Zap,
   Printer,
+  Trophy,
+  Layers,
 } from 'lucide-react'
 import {
   formatCurrency,
   formatDate,
   calculateFuelSummary,
   calculateExpenseSummary,
+  calculateVehicleExpenseComparison,
   getDaysDifference,
 } from '../../lib/utils'
 
@@ -64,6 +68,7 @@ export function Dashboard({ onNavigate, onQuickAction, onOpenAddVehicleModal }) 
   const [fuelLogs, setFuelLogs] = useState([])
   const [reminders, setReminders] = useState([])
   const [expenses, setExpenses] = useState([])
+  const [allExpenses, setAllExpenses] = useState([])
   const [documents, setDocuments] = useState([])
   const [timeline, setTimeline] = useState([])
 
@@ -100,6 +105,11 @@ export function Dashboard({ onNavigate, onQuickAction, onOpenAddVehicleModal }) 
       setExpenses(exp)
       setDocuments(docs)
       setTimeline(tl)
+
+      if (user) {
+        const all = await getAllExpenses(user.id)
+        setAllExpenses(all)
+      }
     } catch (e) {
       console.error(e)
     }
@@ -107,7 +117,12 @@ export function Dashboard({ onNavigate, onQuickAction, onOpenAddVehicleModal }) 
 
   useEffect(() => {
     fetchDashboardData()
-  }, [activeVehicle?.id])
+  }, [activeVehicle?.id, user?.id])
+
+  const fleetComparison = React.useMemo(() => {
+    if (vehicles.length < 2) return null
+    return calculateVehicleExpenseComparison(vehicles, allExpenses, 'all', currency)
+  }, [vehicles, allExpenses, currency])
 
   // =========================================================================
   // 1. EMPTY STATE (When no vehicles exist yet)
@@ -623,6 +638,48 @@ export function Dashboard({ onNavigate, onQuickAction, onOpenAddVehicleModal }) 
             {now.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
           </span>
         </div>
+
+        {/* Multi-Vehicle Expense Comparison Hero Widget (when user has 2+ vehicles) */}
+        {fleetComparison && fleetComparison.ranking.length >= 2 && fleetComparison.highestVehicle && (
+          <div className="p-5 sm:p-6 rounded-3xl bg-gradient-to-r from-[#0F172A] via-[#1E293B] to-[#17365D] text-white border border-slate-700 shadow-md flex flex-col md:flex-row md:items-center justify-between gap-5 relative overflow-hidden">
+            <div className="space-y-1.5 min-w-0 z-10">
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-[#EF4444]/20 text-[#FCA5A5] border border-[#EF4444]/30 uppercase tracking-wider">
+                  <Trophy className="w-3 h-3 text-[#F87171]" />
+                  Fleet Cost Spotlight
+                </span>
+                <span className="text-xs text-slate-400">
+                  {fleetComparison.ranking.length} Vehicles Compared
+                </span>
+              </div>
+              <div className="text-base sm:text-lg font-bold text-white">
+                <span className="text-[#38BDF8] font-black">{fleetComparison.highestVehicle.name}</span> incurs the highest expenses in your fleet ({formatCurrency(fleetComparison.highestVehicle.totalSpent, currency)}).
+              </div>
+              {fleetComparison.runnerUpVehicle && fleetComparison.highestVehicle.id !== fleetComparison.runnerUpVehicle.id && (
+                <p className="text-xs text-slate-300">
+                  Costs{' '}
+                  <span className="font-bold text-[#F87171]">
+                    +{formatCurrency(fleetComparison.highestVehicle.totalSpent - fleetComparison.runnerUpVehicle.totalSpent, currency)}
+                  </span>{' '}
+                  {fleetComparison.highestVehicle.moreThanNext?.percentage !== null && `(+${fleetComparison.highestVehicle.moreThanNext?.percentage}%) `}
+                  more than {fleetComparison.runnerUpVehicle.name} ({formatCurrency(fleetComparison.runnerUpVehicle.totalSpent, currency)}).
+                </p>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0 z-10">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => onNavigate('expenses', 'comparison')}
+                className="bg-white/10 text-white border-white/20 hover:bg-white/20 text-xs font-bold shadow-xs whitespace-nowrap"
+              >
+                Compare All Vehicles →
+              </Button>
+            </div>
+          </div>
+        )}
 
         {/* Monthly Digest Highlight Card */}
         <div className="p-5 rounded-3xl bg-gradient-to-r from-[#FFFFFF] to-[#F8FAFC] border border-[#E2E8F0] shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">

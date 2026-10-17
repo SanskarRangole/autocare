@@ -3,6 +3,7 @@ import { useVehicles } from '../../context/VehicleContext'
 import { useAuth } from '../../context/AuthContext'
 import {
   getExpenses,
+  getAllExpenses,
   createExpense,
   updateExpense,
   deleteExpense,
@@ -14,6 +15,7 @@ import { EmptyState } from '../ui/EmptyState'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { ExpenseFormModal } from './ExpenseFormModal'
 import { ExpenseCharts } from './ExpenseCharts'
+import { VehicleExpenseComparison } from './VehicleExpenseComparison'
 import {
   Receipt,
   Plus,
@@ -24,19 +26,31 @@ import {
   Fuel,
   Wrench,
   ShieldCheck,
+  TrendingUp,
+  Trophy,
+  Layers,
 } from 'lucide-react'
 import { formatCurrency, formatDate, calculateExpenseSummary } from '../../lib/utils'
 
-export function ExpenseList() {
+export function ExpenseList({ initialTab = 'ledger', onOpenAddVehicleModal = () => {} }) {
   const { user, currency } = useAuth()
-  const { activeVehicle } = useVehicles()
+  const { vehicles, activeVehicle, selectVehicle, seedDemoData } = useVehicles()
 
+  const [currentView, setCurrentView] = useState(initialTab)
   const [expenses, setExpenses] = useState([])
+  const [allExpenses, setAllExpenses] = useState([])
   const [modalOpen, setModalOpen] = useState(false)
   const [editingExpense, setEditingExpense] = useState(null)
   const [preset, setPreset] = useState(null)
   const [deletingExpense, setDeletingExpense] = useState(null)
   const [isDeleting, setIsDeleting] = useState(false)
+
+  // Sync initialTab if changed externally
+  useEffect(() => {
+    if (initialTab) {
+      setCurrentView(initialTab)
+    }
+  }, [initialTab])
 
   const handleQuickRepeat = (p) => {
     setEditingExpense(null)
@@ -45,13 +59,20 @@ export function ExpenseList() {
   }
 
   const loadData = async () => {
-    if (!activeVehicle) {
-      setExpenses([])
-      return
-    }
     try {
-      const data = await getExpenses(activeVehicle.id)
-      setExpenses(data)
+      if (activeVehicle) {
+        const data = await getExpenses(activeVehicle.id)
+        setExpenses(data)
+      } else {
+        setExpenses([])
+      }
+
+      if (user) {
+        const all = await getAllExpenses(user.id)
+        setAllExpenses(all)
+      } else {
+        setAllExpenses([])
+      }
     } catch (e) {
       console.error(e)
     }
@@ -59,7 +80,7 @@ export function ExpenseList() {
 
   useEffect(() => {
     loadData()
-  }, [activeVehicle?.id])
+  }, [activeVehicle?.id, user?.id])
 
   const handleSaveExpense = async (data) => {
     if (!user || !activeVehicle) return
@@ -83,16 +104,6 @@ export function ExpenseList() {
     }
   }
 
-  if (!activeVehicle) {
-    return (
-      <EmptyState
-        icon={Receipt}
-        title="No vehicle selected"
-        description="Select a vehicle from your garage to review spending breakdowns and expense analytics."
-      />
-    )
-  }
-
   const summary = calculateExpenseSummary(expenses)
   const topCategory = summary.categoryChartData[0]?.name || '-'
 
@@ -105,27 +116,112 @@ export function ExpenseList() {
             Expenses & Spending
           </h1>
           <p className="text-xs sm:text-sm text-[#64748B] mt-1">
-            Complete cost of ownership ledger and categorical analytics for{' '}
-            <span className="font-semibold text-[#0F172A]">{activeVehicle.name}</span>.
+            {currentView === 'comparison'
+              ? 'Multi-vehicle expense comparison, cost drivers, and fleet rankings.'
+              : activeVehicle
+              ? `Complete cost of ownership ledger and categorical analytics for ${activeVehicle.name}.`
+              : 'Select a vehicle or compare fleet expenses.'}
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => {
-              setEditingExpense(null)
-              setPreset(null)
-              setModalOpen(true)
-            }}
-          >
-            <Plus className="w-4 h-4 mr-1.5" />
-            Add Expense
-          </Button>
+          {activeVehicle && (
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => {
+                setEditingExpense(null)
+                setPreset(null)
+                setModalOpen(true)
+              }}
+            >
+              <Plus className="w-4 h-4 mr-1.5" />
+              Add Expense
+            </Button>
+          )}
         </div>
       </div>
 
-      {/* 1-Tap Quick Expense Shortcuts */}
+      {/* View Switcher Tabs */}
+      <div className="flex border-b border-[#E2E8F0] space-x-6">
+        <button
+          type="button"
+          onClick={() => setCurrentView('ledger')}
+          className={`pb-3 text-sm font-bold border-b-2 transition-all flex items-center gap-2 ${
+            currentView === 'ledger'
+              ? 'border-[#2563EB] text-[#2563EB]'
+              : 'border-transparent text-[#64748B] hover:text-[#0F172A]'
+          }`}
+        >
+          <Receipt className="w-4 h-4" />
+          <span>Active Vehicle Ledger</span>
+          {activeVehicle && (
+            <span className="text-xs font-normal text-[#64748B] hidden sm:inline">
+              ({activeVehicle.name})
+            </span>
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setCurrentView('comparison')}
+          className={`pb-3 text-sm font-bold border-b-2 transition-all flex items-center gap-2 ${
+            currentView === 'comparison'
+              ? 'border-[#2563EB] text-[#2563EB]'
+              : 'border-transparent text-[#64748B] hover:text-[#0F172A]'
+          }`}
+        >
+          <TrendingUp className="w-4 h-4" />
+          <span>Compare Multiple Vehicles</span>
+          <Badge variant="primary" className="text-[10px] px-1.5 py-0 font-extrabold">
+            {vehicles.length} {vehicles.length === 1 ? 'Vehicle' : 'Vehicles'}
+          </Badge>
+        </button>
+      </div>
+
+      {/* VIEW: COMPARISON */}
+      {currentView === 'comparison' && (
+        <VehicleExpenseComparison
+          vehicles={vehicles}
+          allExpenses={allExpenses}
+          currency={currency}
+          activeVehicleId={activeVehicle?.id}
+          onSelectVehicle={selectVehicle}
+          onOpenAddVehicle={onOpenAddVehicleModal}
+          onSeedDemoData={seedDemoData}
+        />
+      )}
+
+      {/* VIEW: ACTIVE VEHICLE LEDGER */}
+      {currentView === 'ledger' && !activeVehicle && (
+        <EmptyState
+          icon={Receipt}
+          title="No vehicle selected"
+          description="Select a vehicle from your garage to review spending breakdowns and expense analytics."
+        />
+      )}
+
+      {currentView === 'ledger' && activeVehicle && (
+        <div className="space-y-6">
+          {/* Multi-vehicle hint banner */}
+          {vehicles.length > 1 && (
+            <div className="p-3.5 rounded-2xl bg-[#EFF6FF] border border-[#DBEAFE] flex items-center justify-between gap-3 text-xs text-[#1E40AF]">
+              <div className="flex items-center gap-2">
+                <Trophy className="w-4 h-4 text-[#2563EB] shrink-0" />
+                <span>
+                  Curious which vehicle in your garage incurs more expenses? Compare {vehicles.length} vehicles side-by-side.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCurrentView('comparison')}
+                className="font-bold underline hover:text-[#172554] shrink-0"
+              >
+                Compare Fleet Expenses →
+              </button>
+            </div>
+          )}
+
+          {/* 1-Tap Quick Expense Shortcuts */}
       <div className="p-3.5 rounded-2xl bg-[#FFFFFF] border border-[#E2E8F0] shadow-xs flex flex-wrap items-center gap-2">
         <span className="text-xs font-bold text-[#17365D] uppercase tracking-wider mr-1">
           1-Tap Quick Log:
@@ -289,6 +385,8 @@ export function ExpenseList() {
           </div>
         )}
       </div>
+      </div>
+      )}
 
       {/* Expense Modal */}
       <ExpenseFormModal

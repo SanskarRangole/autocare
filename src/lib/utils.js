@@ -234,6 +234,229 @@ export function calculateExpenseSummary(expenses = []) {
 }
 
 /**
+ * Multi-Vehicle Expense Comparison Calculation
+ * Compares expenses across multiple vehicles to determine:
+ * - Which vehicle incurs more expense than other vehicles
+ * - Monetary difference and percentage higher vs other vehicles
+ * - Fleet expense share per vehicle
+ * - Category breakdown comparison across vehicles
+ * - Timeframe filtering (all, year, 6months, 30days)
+ */
+export function calculateVehicleExpenseComparison(vehicles = [], expenses = [], timeframe = 'all', currency = 'USD') {
+  if (!vehicles || vehicles.length === 0) {
+    return {
+      vehicles: [],
+      ranking: [],
+      highestVehicle: null,
+      lowestVehicle: null,
+      runnerUpVehicle: null,
+      totalFleetSpent: 0,
+      avgSpent: 0,
+      categoryComparison: [],
+      categoryKeys: [],
+      insights: [],
+    }
+  }
+
+  // Determine cutoff date for timeframe
+  const now = new Date()
+  let cutoffDate = null
+  if (timeframe === '30days') {
+    cutoffDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+  } else if (timeframe === '6months') {
+    cutoffDate = new Date(now.getTime() - 180 * 24 * 60 * 60 * 1000)
+  } else if (timeframe === 'year') {
+    cutoffDate = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000)
+  }
+
+  // Filter expenses by timeframe
+  const filteredExpenses = expenses.filter(e => {
+    if (!cutoffDate) return true
+    if (!e.date) return false
+    const d = new Date(e.date)
+    return !isNaN(d.getTime()) && d >= cutoffDate
+  })
+
+  // Group expenses by vehicle
+  const expensesByVehicleId = {}
+  filteredExpenses.forEach(e => {
+    if (!expensesByVehicleId[e.vehicle_id]) {
+      expensesByVehicleId[e.vehicle_id] = []
+    }
+    expensesByVehicleId[e.vehicle_id].push(e)
+  })
+
+  // Collect all unique categories
+  const allCategoriesSet = new Set()
+  filteredExpenses.forEach(e => {
+    if (e.category) allCategoriesSet.add(e.category)
+  })
+  const categoryKeys = Array.from(allCategoriesSet)
+
+  // Calculate per-vehicle metrics
+  const vehicleStats = vehicles.map(v => {
+    const vExpenses = expensesByVehicleId[v.id] || []
+    const totalSpent = Number(vExpenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0).toFixed(2))
+
+    const categoryTotals = {}
+    vExpenses.forEach(e => {
+      const cat = e.category || 'Other'
+      categoryTotals[cat] = Number(((categoryTotals[cat] || 0) + (Number(e.amount) || 0)).toFixed(2))
+    })
+
+    // Top category for this vehicle
+    let topCategory = null
+    let maxCatVal = -1
+    Object.entries(categoryTotals).forEach(([cat, val]) => {
+      if (val > maxCatVal) {
+        maxCatVal = val
+        topCategory = { name: cat, amount: val }
+      }
+    })
+
+    // Cost per distance (km)
+    const odo = Number(v.current_odometer) || 0
+    const costPerKm = odo > 0 ? Number((totalSpent / odo).toFixed(2)) : null
+
+    return {
+      id: v.id,
+      vehicle: v,
+      name: v.name,
+      type: v.type,
+      make: v.make,
+      model: v.model,
+      year: v.year,
+      license_plate: v.license_plate,
+      current_odometer: odo,
+      totalSpent,
+      expenseCount: vExpenses.length,
+      categoryTotals,
+      topCategory,
+      costPerKm,
+    }
+  })
+
+  // Sort descending by total spend
+  const ranking = [...vehicleStats].sort((a, b) => b.totalSpent - a.totalSpent)
+
+  const totalFleetSpent = Number(ranking.reduce((sum, v) => sum + v.totalSpent, 0).toFixed(2))
+  const avgSpent = ranking.length > 0 ? Number((totalFleetSpent / ranking.length).toFixed(2)) : 0
+
+  const highestVehicle = ranking[0] || null
+  const lowestVehicle = ranking.length > 1 ? ranking[ranking.length - 1] : ranking[0] || null
+  const runnerUpVehicle = ranking.length > 1 ? ranking[1] : null
+
+  // Enrich ranking items with comparative percentages and differences
+  ranking.forEach((item, index) => {
+    item.rank = index + 1
+    item.percentageShare = totalFleetSpent > 0 ? Number(((item.totalSpent / totalFleetSpent) * 100).toFixed(1)) : 0
+    item.differenceVsLowest = lowestVehicle ? Number((item.totalSpent - lowestVehicle.totalSpent).toFixed(2)) : 0
+    item.percentageVsLowest =
+      lowestVehicle && lowestVehicle.totalSpent > 0
+        ? Number((((item.totalSpent - lowestVehicle.totalSpent) / lowestVehicle.totalSpent) * 100).toFixed(1))
+        : null
+
+    item.differenceVsAverage = Number((item.totalSpent - avgSpent).toFixed(2))
+    item.percentageVsAverage =
+      avgSpent > 0 ? Number((((item.totalSpent - avgSpent) / avgSpent) * 100).toFixed(1)) : 0
+
+    // Compare directly against next ranked vehicle if any
+    const nextRanked = ranking[index + 1]
+    if (nextRanked) {
+      item.moreThanNext = {
+        name: nextRanked.name,
+        difference: Number((item.totalSpent - nextRanked.totalSpent).toFixed(2)),
+        percentage:
+          nextRanked.totalSpent > 0
+            ? Number((((item.totalSpent - nextRanked.totalSpent) / nextRanked.totalSpent) * 100).toFixed(1))
+            : null,
+      }
+    } else {
+      item.moreThanNext = null
+    }
+  })
+
+  // Prepare Category Comparison Matrix & Chart data
+  const categoryComparison = categoryKeys.map(cat => {
+    const entry = { category: cat, total: 0 }
+    let highestCatSpender = null
+    let maxAmount = -1
+
+    ranking.forEach(v => {
+      const val = v.categoryTotals[cat] || 0
+      entry[v.id] = val
+      entry[`${v.id}_name`] = v.name
+      entry.total = Number((entry.total + val).toFixed(2))
+
+      if (val > maxAmount) {
+        maxAmount = val
+        highestCatSpender = { name: v.name, id: v.id, amount: val }
+      }
+    })
+
+    entry.highestSpender = highestCatSpender
+    return entry
+  }).sort((a, b) => b.total - a.total)
+
+  // Generate automated natural language comparative insights
+  const insights = []
+  if (ranking.length >= 2 && highestVehicle && runnerUpVehicle) {
+    const diff = Number((highestVehicle.totalSpent - runnerUpVehicle.totalSpent).toFixed(2))
+    const pct = runnerUpVehicle.totalSpent > 0
+      ? Number(((diff / runnerUpVehicle.totalSpent) * 100).toFixed(1))
+      : null
+
+    if (diff > 0) {
+      insights.push({
+        type: 'primary',
+        title: `${highestVehicle.name} is Your Most Expensive Vehicle`,
+        description: `${highestVehicle.name} expense is ${formatCurrency(diff, currency)}${pct !== null ? ` (+${pct}%)` : ''} higher than ${runnerUpVehicle.name}, accounting for ${highestVehicle.percentageShare}% of all garage expenses.`,
+      })
+    } else if (diff === 0 && highestVehicle.totalSpent > 0) {
+      insights.push({
+        type: 'neutral',
+        title: 'Tied Operating Expenses',
+        description: `${highestVehicle.name} and ${runnerUpVehicle.name} currently have identical recorded expenses (${formatCurrency(highestVehicle.totalSpent, currency)} each).`,
+      })
+    }
+
+    if (highestVehicle.topCategory) {
+      const topPct = highestVehicle.totalSpent > 0
+        ? ((highestVehicle.topCategory.amount / highestVehicle.totalSpent) * 100).toFixed(0)
+        : 0
+      insights.push({
+        type: 'category',
+        title: `Primary Cost Driver: ${highestVehicle.topCategory.name}`,
+        description: `${topPct}% (${formatCurrency(highestVehicle.topCategory.amount, currency)}) of ${highestVehicle.name}'s spending went towards ${highestVehicle.topCategory.name}.`,
+      })
+    }
+
+    if (lowestVehicle && lowestVehicle.id !== highestVehicle.id && lowestVehicle.totalSpent > 0) {
+      insights.push({
+        type: 'economy',
+        title: `Most Cost-Efficient: ${lowestVehicle.name}`,
+        description: `${lowestVehicle.name} is the most economical vehicle in your garage, saving you ${formatCurrency(highestVehicle.totalSpent - lowestVehicle.totalSpent, currency)} compared to ${highestVehicle.name}.`,
+      })
+    }
+  }
+
+  return {
+    vehicles: vehicleStats,
+    ranking,
+    highestVehicle,
+    lowestVehicle,
+    runnerUpVehicle,
+    totalFleetSpent,
+    avgSpent,
+    categoryComparison,
+    categoryKeys,
+    insights,
+    timeframe,
+    filteredExpenseCount: filteredExpenses.length,
+  }
+}
+
+/**
  * Generate Rule-Based Insights
  */
 export function generateVehicleInsights({ vehicle, services = [], fuelLogs = [], reminders = [], expenses = [] }) {

@@ -43,10 +43,11 @@ export function AuthProvider({ children }) {
         }
 
         // Subscribe to live Supabase Auth state changes (sign in, sign out, token refresh)
-        if (live && supabase?.auth?.onAuthStateChange) {
+        if (supabase?.auth?.onAuthStateChange) {
           const { data: { subscription } } = supabase.auth.onAuthStateChange(
             async (event, session) => {
               if (session?.user) {
+                setIsLiveDatabase(true)
                 setUser(session.user)
                 const userProfile = await apiGetProfile(
                   session.user.id,
@@ -82,6 +83,7 @@ export function AuthProvider({ children }) {
     setLoading(true)
     try {
       const { user: signedInUser } = await apiSignIn(credentials)
+      setIsLiveDatabase(isUsingLiveSupabase())
       setUser(signedInUser)
       const userProfile = await apiGetProfile(
         signedInUser.id,
@@ -99,6 +101,7 @@ export function AuthProvider({ children }) {
     setLoading(true)
     try {
       const res = await apiSignUp(credentials)
+      setIsLiveDatabase(isUsingLiveSupabase())
       const newUser = res.user
       if (newUser) {
         setUser(newUser)
@@ -119,6 +122,7 @@ export function AuthProvider({ children }) {
     setLoading(true)
     try {
       const { user: demoUser } = await apiSignInDemo()
+      setIsLiveDatabase(isUsingLiveSupabase())
       setUser(demoUser)
       const userProfile = await apiGetProfile(demoUser.id)
       setProfile(userProfile)
@@ -132,6 +136,7 @@ export function AuthProvider({ children }) {
     setLoading(true)
     try {
       await apiSignOut()
+      setIsLiveDatabase(isUsingLiveSupabase())
       setUser(null)
       setProfile(null)
     } finally {

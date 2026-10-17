@@ -49,7 +49,15 @@ function MainLayout() {
   } = useVehicles()
 
   const [currentTab, setCurrentTab] = useState('dashboard')
+  const [expenseInitialTab, setExpenseInitialTab] = useState('ledger')
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
+
+  const handleNavigate = (tab, subTab = null) => {
+    if (tab === 'expenses' && subTab) {
+      setExpenseInitialTab(subTab)
+    }
+    setCurrentTab(tab)
+  }
 
   // Modal States
   const [authModalOpen, setAuthModalOpen] = useState(false)
@@ -127,7 +135,7 @@ function MainLayout() {
       {/* Desktop Sidebar */}
       <Sidebar
         currentTab={currentTab}
-        onNavigate={setCurrentTab}
+        onNavigate={handleNavigate}
         isCollapsed={isSidebarCollapsed}
         onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
       />
@@ -136,9 +144,9 @@ function MainLayout() {
       <div className="flex-1 flex flex-col min-w-0 pb-16 md:pb-6">
         <Navbar
           currentTab={currentTab}
-          onNavigate={(tab) => {
+          onNavigate={(tab, subTab) => {
             if (tab === 'auth') setAuthModalOpen(true)
-            else setCurrentTab(tab)
+            else handleNavigate(tab, subTab)
           }}
           onOpenNewVehicleModal={handleOpenAddVehicle}
           onQuickAction={handleQuickAction}
@@ -147,7 +155,7 @@ function MainLayout() {
         <main className="flex-1 px-4 sm:px-8 py-6 max-w-7xl w-full mx-auto">
           {currentTab === 'dashboard' && (
             <Dashboard
-              onNavigate={setCurrentTab}
+              onNavigate={handleNavigate}
               onQuickAction={handleQuickAction}
               onOpenAddVehicleModal={handleOpenAddVehicle}
               onOpenRenewalModal={handleOpenRenewal}
@@ -157,7 +165,7 @@ function MainLayout() {
 
           {currentTab === 'assist' && (
             <AutoCareAssist
-              onNavigate={setCurrentTab}
+              onNavigate={handleNavigate}
               onQuickAction={handleQuickAction}
               onOpenRenewalModal={handleOpenRenewal}
               onOpenReportModal={handleOpenReport}
@@ -168,6 +176,7 @@ function MainLayout() {
             <VehicleList
               onOpenAddModal={handleOpenAddVehicle}
               onEditVehicle={handleEditVehicle}
+              onNavigate={handleNavigate}
             />
           )}
 
@@ -177,7 +186,12 @@ function MainLayout() {
 
           {currentTab === 'reminders' && <ReminderList />}
 
-          {currentTab === 'expenses' && <ExpenseList />}
+          {currentTab === 'expenses' && (
+            <ExpenseList
+              initialTab={expenseInitialTab}
+              onOpenAddVehicleModal={handleOpenAddVehicle}
+            />
+          )}
 
           {currentTab === 'documents' && <DocumentList />}
 
@@ -190,7 +204,7 @@ function MainLayout() {
       {/* Bottom Nav for Mobile */}
       <MobileNav
         currentTab={currentTab}
-        onNavigate={setCurrentTab}
+        onNavigate={handleNavigate}
         onQuickAction={handleQuickAction}
       />
 
